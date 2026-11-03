@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Api.Middlewares;
 using Core.DTOs;
 using Core.Enums;
 using Core.Exceptions;
@@ -17,6 +18,7 @@ public static class MaterialEndpoints
         group.MapPost("/", SubmitMaterial)
             .WithName("SubmitMaterial")
             .RequireAuthorization("DelegateOrAdmin")
+            .RequireRateLimiting(RateLimitingExtensions.StrictPolicy)
             .DisableAntiforgery();
 
         group.MapGet("/", GetMaterials)
