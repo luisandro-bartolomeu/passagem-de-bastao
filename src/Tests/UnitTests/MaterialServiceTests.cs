@@ -643,4 +643,170 @@ public class MaterialServiceTests
 
         await act.Should().ThrowAsync<MaterialNotFoundException>();
     }
+
+    [Fact]
+    public async Task UpdateMaterialStatusAsync_ApprovePendingMaterial_ShouldTransitionToPublishedAndClearReason()
+    {
+        using var context = CreateDbContext();
+        var user = new User { Id = Guid.NewGuid(), Name = "Delegado Silva", Email = "del@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var subject = new Subject { Id = 1, YearLevel = 1, Code = "IGF101", Name = "Cálculo I" };
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            SubjectId = 1,
+            Subject = subject,
+            UploadedByUserId = user.Id,
+            UploadedByUser = user,
+            Title = "Exercícios",
+            Description = "Lista 1",
+            MaterialType = MaterialType.Exam,
+            FileStorageKey = "keys/mat1.pdf",
+            OriginalFileName = "mat1.pdf",
+            ContentType = "application/pdf",
+            FileSizeBytes = 1000,
+            Status = MaterialStatus.Pending,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        context.Users.Add(user);
+        context.Subjects.Add(subject);
+        context.Materials.Add(material);
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        var result = await sut.UpdateMaterialStatusAsync(material.Id, MaterialStatus.Published, null);
+
+        result.Status.Should().Be("Published");
+        result.RejectionReason.Should().BeNull();
+        result.UpdatedAt.Should().NotBeNull();
+
+        var updatedEntity = await context.Materials.FindAsync(material.Id);
+        updatedEntity!.Status.Should().Be(MaterialStatus.Published);
+        updatedEntity.RejectionReason.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task UpdateMaterialStatusAsync_RejectPendingMaterialWithReason_ShouldTransitionToRejectedAndStoreReason()
+    {
+        using var context = CreateDbContext();
+        var user = new User { Id = Guid.NewGuid(), Name = "Delegado Silva", Email = "del@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var subject = new Subject { Id = 1, YearLevel = 1, Code = "IGF101", Name = "Cálculo I" };
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            SubjectId = 1,
+            Subject = subject,
+            UploadedByUserId = user.Id,
+            UploadedByUser = user,
+            Title = "Sebenta",
+            Description = "Sebenta",
+            MaterialType = MaterialType.LectureNote,
+            FileStorageKey = "keys/seb1.pdf",
+            OriginalFileName = "seb1.pdf",
+            ContentType = "application/pdf",
+            FileSizeBytes = 1000,
+            Status = MaterialStatus.Pending,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        context.Users.Add(user);
+        context.Subjects.Add(subject);
+        context.Materials.Add(material);
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        var reason = "Arquivo incompleto faltando páginas 10 a 20.";
+        var result = await sut.UpdateMaterialStatusAsync(material.Id, MaterialStatus.Rejected, reason);
+
+        result.Status.Should().Be("Rejected");
+        result.RejectionReason.Should().Be(reason);
+        result.UpdatedAt.Should().NotBeNull();
+
+        var updatedEntity = await context.Materials.FindAsync(material.Id);
+        updatedEntity!.Status.Should().Be(MaterialStatus.Rejected);
+        updatedEntity.RejectionReason.Should().Be(reason);
+    }
+
+    [Fact]
+    public async Task UpdateMaterialStatusAsync_RejectWithoutReason_ShouldThrowValidationException()
+    {
+        using var context = CreateDbContext();
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        var actNull = async () => await sut.UpdateMaterialStatusAsync(Guid.NewGuid(), MaterialStatus.Rejected, null);
+        var actEmpty = async () => await sut.UpdateMaterialStatusAsync(Guid.NewGuid(), MaterialStatus.Rejected, "   ");
+
+        var exNull = await actNull.Should().ThrowAsync<ValidationException>();
+        exNull.WithMessage("*motivo de rejeição é obrigatório*");
+
+        var exEmpty = await actEmpty.Should().ThrowAsync<ValidationException>();
+        exEmpty.WithMessage("*motivo de rejeição é obrigatório*");
+    }
+
+    [Fact]
+    public async Task UpdateMaterialStatusAsync_WithInvalidStatus_ShouldThrowValidationException()
+    {
+        using var context = CreateDbContext();
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        var act = async () => await sut.UpdateMaterialStatusAsync(Guid.NewGuid(), MaterialStatus.Pending, null);
+
+        var ex = await act.Should().ThrowAsync<ValidationException>();
+        ex.WithMessage("*deve ser 'Published' ou 'Rejected'*");
+    }
+
+    [Fact]
+    public async Task UpdateMaterialStatusAsync_WithNonExistentId_ShouldThrowMaterialNotFoundException()
+    {
+        using var context = CreateDbContext();
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        var act = async () => await sut.UpdateMaterialStatusAsync(Guid.NewGuid(), MaterialStatus.Published, null);
+
+        await act.Should().ThrowAsync<MaterialNotFoundException>();
+    }
+
+    [Fact]
+    public async Task UpdateMaterialStatusAsync_ApprovePreviouslyRejectedMaterial_ShouldClearRejectionReason()
+    {
+        using var context = CreateDbContext();
+        var user = new User { Id = Guid.NewGuid(), Name = "Delegado Silva", Email = "del@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var subject = new Subject { Id = 1, YearLevel = 1, Code = "IGF101", Name = "Cálculo I" };
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            SubjectId = 1,
+            Subject = subject,
+            UploadedByUserId = user.Id,
+            UploadedByUser = user,
+            Title = "Sebenta Rejeitada",
+            Description = "Sebenta",
+            MaterialType = MaterialType.LectureNote,
+            FileStorageKey = "keys/seb1.pdf",
+            OriginalFileName = "seb1.pdf",
+            ContentType = "application/pdf",
+            FileSizeBytes = 1000,
+            Status = MaterialStatus.Rejected,
+            RejectionReason = "Motivo antigo",
+            CreatedAt = DateTime.UtcNow
+        };
+
+        context.Users.Add(user);
+        context.Subjects.Add(subject);
+        context.Materials.Add(material);
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        var result = await sut.UpdateMaterialStatusAsync(material.Id, MaterialStatus.Published, null);
+
+        result.Status.Should().Be("Published");
+        result.RejectionReason.Should().BeNull();
+
+        var updatedEntity = await context.Materials.FindAsync(material.Id);
+        updatedEntity!.Status.Should().Be(MaterialStatus.Published);
+        updatedEntity.RejectionReason.Should().BeNull();
+    }
 }

@@ -279,6 +279,44 @@ public class MaterialService : IMaterialService
             id, currentUserId, currentUserRole);
     }
 
+    public async Task<MaterialResponseDto> UpdateMaterialStatusAsync(
+        Guid id,
+        MaterialStatus newStatus,
+        string? rejectionReason,
+        CancellationToken cancellationToken = default)
+    {
+        if (newStatus != MaterialStatus.Published && newStatus != MaterialStatus.Rejected)
+        {
+            throw new ValidationException("O estado pretendido deve ser 'Published' ou 'Rejected'.");
+        }
+
+        if (newStatus == MaterialStatus.Rejected && string.IsNullOrWhiteSpace(rejectionReason))
+        {
+            throw new ValidationException("O motivo de rejeição é obrigatório ao rejeitar um material.");
+        }
+
+        var material = await _dbContext.Materials
+            .Include(m => m.Subject)
+            .Include(m => m.UploadedByUser)
+            .FirstOrDefaultAsync(m => m.Id == id, cancellationToken);
+
+        if (material == null)
+        {
+            throw new MaterialNotFoundException(id);
+        }
+
+        material.Status = newStatus;
+        material.RejectionReason = newStatus == MaterialStatus.Rejected ? rejectionReason!.Trim() : null;
+        material.UpdatedAt = DateTime.UtcNow;
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation("Estado do material {MaterialId} atualizado para {Status}. Motivo: {Reason}",
+            material.Id, material.Status, material.RejectionReason);
+
+        return MapToResponseDto(material, material.Subject.Name, material.UploadedByUser.Name);
+    }
+
     private static MaterialResponseDto MapToResponseDto(Material m, string subjectName, string userName)
     {
         return new MaterialResponseDto(
@@ -298,7 +336,8 @@ public class MaterialService : IMaterialService
             PeerHelperName: m.PeerHelperName,
             PeerHelperContact: m.PeerHelperContact,
             CreatedAt: m.CreatedAt,
-            UpdatedAt: m.UpdatedAt
+            UpdatedAt: m.UpdatedAt,
+            RejectionReason: m.RejectionReason
         );
     }
 }

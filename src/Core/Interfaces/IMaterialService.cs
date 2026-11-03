@@ -25,4 +25,10 @@ public interface IMaterialService
         Guid currentUserId,
         UserRole currentUserRole,
         CancellationToken cancellationToken = default);
+
+    Task<MaterialResponseDto> UpdateMaterialStatusAsync(
+        Guid id,
+        MaterialStatus newStatus,
+        string? rejectionReason,
+        CancellationToken cancellationToken = default);
 }

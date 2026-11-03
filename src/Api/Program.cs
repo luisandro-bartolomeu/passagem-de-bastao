@@ -69,8 +69,11 @@ app.MapGet("/", () => Results.Ok(new { message = "IGF Academic Repository API" }
 app.MapGet("/health", () => Results.Ok(new { status = "Healthy" }))
    .WithName("GetHealth");
 
-// Map Materials Endpoints (T06)
+// Map Materials Endpoints (T06 & T07)
 app.MapMaterialEndpoints();
+
+// Map Admin Materials Moderation Endpoints (T08)
+app.MapAdminMaterialEndpoints();
 
 app.Run();
 

@@ -33,7 +33,8 @@ public record MaterialResponseDto(
     string? PeerHelperName,
     string? PeerHelperContact,
     DateTime CreatedAt,
-    DateTime? UpdatedAt
+    DateTime? UpdatedAt,
+    string? RejectionReason = null
 );
 
 public record UpdateMaterialDto(
@@ -52,4 +53,9 @@ public record UpdateMaterialRequest(
     int SubjectId,
     string? PeerHelperName,
     string? PeerHelperContact
+);
+
+public record UpdateMaterialStatusRequest(
+    string Status,
+    string? RejectionReason
 );
