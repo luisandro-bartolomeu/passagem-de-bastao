@@ -59,3 +59,25 @@ public record UpdateMaterialStatusRequest(
     string Status,
     string? RejectionReason
 );
+
+public record PagedResult<T>(
+    IReadOnlyList<T> Items,
+    int Page,
+    int PageSize,
+    int TotalCount,
+    int TotalPages
+);
+
+public record MaterialQueryFilter(
+    int? YearLevel = null,
+    int? SubjectId = null,
+    MaterialType? MaterialType = null,
+    int Page = 1,
+    int PageSize = 20
+);
+
+public record MaterialDownloadDto(
+    Stream Content,
+    string ContentType,
+    string OriginalFileName
+);

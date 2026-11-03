@@ -19,8 +19,14 @@ public static class MaterialEndpoints
             .RequireAuthorization("DelegateOrAdmin")
             .DisableAntiforgery();
 
+        group.MapGet("/", GetMaterials)
+            .WithName("GetMaterials");
+
         group.MapGet("/{id:guid}", GetMaterialById)
             .WithName("GetMaterialById");
+
+        group.MapGet("/{id:guid}/download", DownloadMaterial)
+            .WithName("DownloadMaterial");
 
         group.MapPut("/{id:guid}", UpdateMaterial)
             .WithName("UpdateMaterial")
@@ -173,6 +179,78 @@ public static class MaterialEndpoints
     {
         var material = await materialService.GetMaterialByIdAsync(id, cancellationToken);
         return material == null ? Results.NotFound() : Results.Ok(material);
+    }
+
+    public static async Task<IResult> GetMaterials(
+        [FromQuery(Name = "yearLevel")] int? yearLevel,
+        [FromQuery(Name = "year")] int? year,
+        [FromQuery(Name = "subjectId")] int? subjectId,
+        [FromQuery(Name = "materialType")] string? materialTypeStr,
+        [FromQuery(Name = "page")] int? page,
+        [FromQuery(Name = "pageSize")] int? pageSize,
+        IMaterialService materialService,
+        CancellationToken cancellationToken)
+    {
+        var effectiveYear = yearLevel ?? year;
+        if (effectiveYear.HasValue && (effectiveYear.Value < 1 || effectiveYear.Value > 4))
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Ano Curricular Inválido",
+                detail: "O ano curricular deve estar compreendido entre 1 e 4.");
+        }
+
+        MaterialType? materialType = null;
+        if (!string.IsNullOrWhiteSpace(materialTypeStr))
+        {
+            if (!TryParseMaterialType(materialTypeStr, out var parsedType))
+            {
+                return Results.Problem(
+                    statusCode: StatusCodes.Status400BadRequest,
+                    title: "Tipo de Material Inválido",
+                    detail: "O tipo de material deve ser 'Exam' ('Prova') ou 'LectureNote' ('Sebenta').");
+            }
+            materialType = parsedType;
+        }
+
+        var pageNumber = page.GetValueOrDefault(1);
+        if (pageNumber < 1) pageNumber = 1;
+
+        var size = pageSize.GetValueOrDefault(20);
+        if (size < 1) size = 20;
+        if (size > 50) size = 50;
+
+        var filter = new MaterialQueryFilter(
+            YearLevel: effectiveYear,
+            SubjectId: subjectId,
+            MaterialType: materialType,
+            Page: pageNumber,
+            PageSize: size
+        );
+
+        var result = await materialService.GetPublishedMaterialsAsync(filter, cancellationToken);
+        return Results.Ok(result);
+    }
+
+    public static async Task<IResult> DownloadMaterial(
+        Guid id,
+        IMaterialService materialService,
+        CancellationToken cancellationToken)
+    {
+        var download = await materialService.GetMaterialForDownloadAsync(id, cancellationToken);
+        if (download == null)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status404NotFound,
+                title: "Material Não Encontrado",
+                detail: "O material solicitado não existe ou não está publicado para download.");
+        }
+
+        return Results.File(
+            fileStream: download.Content,
+            contentType: download.ContentType,
+            fileDownloadName: download.OriginalFileName,
+            enableRangeProcessing: true);
     }
 
     public static async Task<IResult> UpdateMaterial(

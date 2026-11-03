@@ -317,6 +317,78 @@ public class MaterialService : IMaterialService
         return MapToResponseDto(material, material.Subject.Name, material.UploadedByUser.Name);
     }
 
+    public async Task<PagedResult<MaterialResponseDto>> GetPublishedMaterialsAsync(
+        MaterialQueryFilter filter,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+
+        var query = _dbContext.Materials
+            .Include(m => m.Subject)
+            .Include(m => m.UploadedByUser)
+            .AsNoTracking()
+            .Where(m => m.Status == MaterialStatus.Published);
+
+        if (filter.YearLevel.HasValue)
+        {
+            query = query.Where(m => m.Subject.YearLevel == filter.YearLevel.Value);
+        }
+
+        if (filter.SubjectId.HasValue)
+        {
+            query = query.Where(m => m.SubjectId == filter.SubjectId.Value);
+        }
+
+        if (filter.MaterialType.HasValue)
+        {
+            query = query.Where(m => m.MaterialType == filter.MaterialType.Value);
+        }
+
+        var totalCount = await query.CountAsync(cancellationToken);
+
+        var page = filter.Page < 1 ? 1 : filter.Page;
+        var pageSize = filter.PageSize < 1 ? 20 : (filter.PageSize > 50 ? 50 : filter.PageSize);
+        var totalPages = totalCount == 0 ? 0 : (int)Math.Ceiling(totalCount / (double)pageSize);
+
+        var materials = await query
+            .OrderByDescending(m => m.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        var items = materials
+            .Select(m => MapToResponseDto(m, m.Subject.Name, m.UploadedByUser.Name))
+            .ToList();
+
+        return new PagedResult<MaterialResponseDto>(items, page, pageSize, totalCount, totalPages);
+    }
+
+    public async Task<MaterialDownloadDto?> GetMaterialForDownloadAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        var material = await _dbContext.Materials
+            .AsNoTracking()
+            .FirstOrDefaultAsync(m => m.Id == id && m.Status == MaterialStatus.Published, cancellationToken);
+
+        if (material == null)
+        {
+            return null;
+        }
+
+        var downloadResult = await _fileStorageService.DownloadAsync(material.FileStorageKey, cancellationToken);
+        if (downloadResult == null)
+        {
+            return null;
+        }
+
+        return new MaterialDownloadDto(
+            Content: downloadResult.Content,
+            ContentType: material.ContentType,
+            OriginalFileName: material.OriginalFileName
+        );
+    }
+
     private static MaterialResponseDto MapToResponseDto(Material m, string subjectName, string userName)
     {
         return new MaterialResponseDto(

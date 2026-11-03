@@ -31,4 +31,12 @@ public interface IMaterialService
         MaterialStatus newStatus,
         string? rejectionReason,
         CancellationToken cancellationToken = default);
+
+    Task<PagedResult<MaterialResponseDto>> GetPublishedMaterialsAsync(
+        MaterialQueryFilter filter,
+        CancellationToken cancellationToken = default);
+
+    Task<MaterialDownloadDto?> GetMaterialForDownloadAsync(
+        Guid id,
+        CancellationToken cancellationToken = default);
 }

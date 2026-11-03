@@ -37,6 +37,7 @@ public class MaterialServiceTests
         public bool ShouldThrowSizeLimit { get; set; }
         public List<string> UploadedKeys { get; } = new();
         public List<string> DeletedKeys { get; } = new();
+        public Dictionary<string, byte[]> StoredFiles { get; } = new();
 
         public Task<FileStorageResult> UploadAsync(
             Stream content,
@@ -56,15 +57,24 @@ public class MaterialServiceTests
 
             var key = $"2026/11/{Guid.NewGuid():N}.pdf";
             UploadedKeys.Add(key);
+            StoredFiles[key] = ValidPdfBytes;
             return Task.FromResult(new FileStorageResult(key, fileName, contentType, 1024));
         }
 
-        public Task<FileDownloadResult?> DownloadAsync(string storageKey, CancellationToken cancellationToken = default) =>
-            Task.FromResult<FileDownloadResult?>(null);
+        public Task<FileDownloadResult?> DownloadAsync(string storageKey, CancellationToken cancellationToken = default)
+        {
+            if (StoredFiles.TryGetValue(storageKey, out var bytes))
+            {
+                return Task.FromResult<FileDownloadResult?>(new FileDownloadResult(new MemoryStream(bytes), "application/pdf", "download.pdf"));
+            }
+
+            return Task.FromResult<FileDownloadResult?>(null);
+        }
 
         public Task<bool> DeleteAsync(string storageKey, CancellationToken cancellationToken = default)
         {
             DeletedKeys.Add(storageKey);
+            StoredFiles.Remove(storageKey);
             return Task.FromResult(true);
         }
 
@@ -808,5 +818,213 @@ public class MaterialServiceTests
         var updatedEntity = await context.Materials.FindAsync(material.Id);
         updatedEntity!.Status.Should().Be(MaterialStatus.Published);
         updatedEntity.RejectionReason.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetPublishedMaterialsAsync_ShouldOnlyReturnPublishedMaterials_AndExcludePendingAndRejected()
+    {
+        using var context = CreateDbContext();
+        var user = new User { Id = Guid.NewGuid(), Name = "User 1", Email = "u1@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var subject = new Subject { Id = 1, YearLevel = 1, Code = "IGF101", Name = "Cálculo I" };
+
+        var published1 = new Material
+        {
+            Id = Guid.NewGuid(), SubjectId = 1, Subject = subject, UploadedByUserId = user.Id, UploadedByUser = user,
+            Title = "Pub 1", Description = "Desc", MaterialType = MaterialType.Exam,
+            FileStorageKey = "k1", OriginalFileName = "p1.pdf", ContentType = "application/pdf", FileSizeBytes = 100,
+            Status = MaterialStatus.Published, CreatedAt = DateTime.UtcNow.AddMinutes(-10)
+        };
+        var published2 = new Material
+        {
+            Id = Guid.NewGuid(), SubjectId = 1, Subject = subject, UploadedByUserId = user.Id, UploadedByUser = user,
+            Title = "Pub 2", Description = "Desc", MaterialType = MaterialType.LectureNote,
+            FileStorageKey = "k2", OriginalFileName = "p2.pdf", ContentType = "application/pdf", FileSizeBytes = 100,
+            Status = MaterialStatus.Published, CreatedAt = DateTime.UtcNow.AddMinutes(-5)
+        };
+        var pending = new Material
+        {
+            Id = Guid.NewGuid(), SubjectId = 1, Subject = subject, UploadedByUserId = user.Id, UploadedByUser = user,
+            Title = "Pending 1", Description = "Desc", MaterialType = MaterialType.Exam,
+            FileStorageKey = "k3", OriginalFileName = "pen.pdf", ContentType = "application/pdf", FileSizeBytes = 100,
+            Status = MaterialStatus.Pending, CreatedAt = DateTime.UtcNow
+        };
+        var rejected = new Material
+        {
+            Id = Guid.NewGuid(), SubjectId = 1, Subject = subject, UploadedByUserId = user.Id, UploadedByUser = user,
+            Title = "Rejected 1", Description = "Desc", MaterialType = MaterialType.Exam,
+            FileStorageKey = "k4", OriginalFileName = "rej.pdf", ContentType = "application/pdf", FileSizeBytes = 100,
+            Status = MaterialStatus.Rejected, RejectionReason = "Motivo", CreatedAt = DateTime.UtcNow
+        };
+
+        context.Users.Add(user);
+        context.Subjects.Add(subject);
+        context.Materials.AddRange(published1, published2, pending, rejected);
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        var result = await sut.GetPublishedMaterialsAsync(new MaterialQueryFilter());
+
+        result.TotalCount.Should().Be(2);
+        result.Items.Should().HaveCount(2);
+        result.Items.Select(i => i.Id).Should().Contain([published1.Id, published2.Id]);
+        result.Items.Select(i => i.Id).Should().NotContain([pending.Id, rejected.Id]);
+    }
+
+    [Fact]
+    public async Task GetPublishedMaterialsAsync_WithPagination_ShouldSliceCorrectly()
+    {
+        using var context = CreateDbContext();
+        var user = new User { Id = Guid.NewGuid(), Name = "User", Email = "u@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var subject = new Subject { Id = 1, YearLevel = 1, Code = "IGF101", Name = "Cálculo I" };
+        context.Users.Add(user);
+        context.Subjects.Add(subject);
+
+        for (int i = 1; i <= 5; i++)
+        {
+            context.Materials.Add(new Material
+            {
+                Id = Guid.NewGuid(), SubjectId = 1, Subject = subject, UploadedByUserId = user.Id, UploadedByUser = user,
+                Title = $"Material {i}", Description = "Desc", MaterialType = MaterialType.Exam,
+                FileStorageKey = $"k{i}", OriginalFileName = $"f{i}.pdf", ContentType = "application/pdf", FileSizeBytes = 100,
+                Status = MaterialStatus.Published, CreatedAt = DateTime.UtcNow.AddMinutes(i)
+            });
+        }
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        var result = await sut.GetPublishedMaterialsAsync(new MaterialQueryFilter(Page: 2, PageSize: 2));
+
+        result.Page.Should().Be(2);
+        result.PageSize.Should().Be(2);
+        result.TotalCount.Should().Be(5);
+        result.TotalPages.Should().Be(3);
+        result.Items.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task GetPublishedMaterialsAsync_WithFilters_ShouldReturnFilteredResults()
+    {
+        using var context = CreateDbContext();
+        var user = new User { Id = Guid.NewGuid(), Name = "User", Email = "u@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var year1 = new AcademicYear { Id = 1, YearLevel = 1, Name = "1.º Ano" };
+        var year2 = new AcademicYear { Id = 2, YearLevel = 2, Name = "2.º Ano" };
+        var sub1 = new Subject { Id = 1, YearLevel = 1, AcademicYear = year1, Code = "IGF101", Name = "Cálculo I" };
+        var sub2 = new Subject { Id = 2, YearLevel = 2, AcademicYear = year2, Code = "IGF201", Name = "Base de Dados" };
+
+        var m1 = new Material
+        {
+            Id = Guid.NewGuid(), SubjectId = 1, Subject = sub1, UploadedByUserId = user.Id, UploadedByUser = user,
+            Title = "Prova Cálculo", Description = "Desc", MaterialType = MaterialType.Exam,
+            FileStorageKey = "k1", OriginalFileName = "f1.pdf", ContentType = "application/pdf", FileSizeBytes = 100,
+            Status = MaterialStatus.Published, CreatedAt = DateTime.UtcNow
+        };
+        var m2 = new Material
+        {
+            Id = Guid.NewGuid(), SubjectId = 1, Subject = sub1, UploadedByUserId = user.Id, UploadedByUser = user,
+            Title = "Sebenta Cálculo", Description = "Desc", MaterialType = MaterialType.LectureNote,
+            FileStorageKey = "k2", OriginalFileName = "f2.pdf", ContentType = "application/pdf", FileSizeBytes = 100,
+            Status = MaterialStatus.Published, CreatedAt = DateTime.UtcNow
+        };
+        var m3 = new Material
+        {
+            Id = Guid.NewGuid(), SubjectId = 2, Subject = sub2, UploadedByUserId = user.Id, UploadedByUser = user,
+            Title = "Prova BD", Description = "Desc", MaterialType = MaterialType.Exam,
+            FileStorageKey = "k3", OriginalFileName = "f3.pdf", ContentType = "application/pdf", FileSizeBytes = 100,
+            Status = MaterialStatus.Published, CreatedAt = DateTime.UtcNow
+        };
+
+        context.Users.Add(user);
+        context.AcademicYears.AddRange(year1, year2);
+        context.Subjects.AddRange(sub1, sub2);
+        context.Materials.AddRange(m1, m2, m3);
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        // Filter by YearLevel
+        var resYear2 = await sut.GetPublishedMaterialsAsync(new MaterialQueryFilter(YearLevel: 2));
+        resYear2.TotalCount.Should().Be(1);
+        resYear2.Items[0].Id.Should().Be(m3.Id);
+
+        // Filter by SubjectId
+        var resSub1 = await sut.GetPublishedMaterialsAsync(new MaterialQueryFilter(SubjectId: 1));
+        resSub1.TotalCount.Should().Be(2);
+
+        // Filter by MaterialType
+        var resExam = await sut.GetPublishedMaterialsAsync(new MaterialQueryFilter(MaterialType: MaterialType.Exam));
+        resExam.TotalCount.Should().Be(2);
+        resExam.Items.Select(i => i.Id).Should().Contain([m1.Id, m3.Id]);
+    }
+
+    [Fact]
+    public async Task GetMaterialForDownloadAsync_WhenPublished_ShouldReturnStreamAndDetails()
+    {
+        using var context = CreateDbContext();
+        var storage = new TestFileStorageService();
+        var user = new User { Id = Guid.NewGuid(), Name = "User", Email = "u@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var subject = new Subject { Id = 1, YearLevel = 1, Code = "IGF101", Name = "Cálculo I" };
+        var key = "keys/pub.pdf";
+        storage.StoredFiles[key] = [0x25, 0x50, 0x44, 0x46]; // %PDF
+
+        var material = new Material
+        {
+            Id = Guid.NewGuid(), SubjectId = 1, Subject = subject, UploadedByUserId = user.Id, UploadedByUser = user,
+            Title = "Publicado", Description = "Desc", MaterialType = MaterialType.Exam,
+            FileStorageKey = key, OriginalFileName = "original.pdf", ContentType = "application/pdf", FileSizeBytes = 4,
+            Status = MaterialStatus.Published, CreatedAt = DateTime.UtcNow
+        };
+
+        context.Users.Add(user);
+        context.Subjects.Add(subject);
+        context.Materials.Add(material);
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, storage, new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        var result = await sut.GetMaterialForDownloadAsync(material.Id);
+
+        result.Should().NotBeNull();
+        result!.ContentType.Should().Be("application/pdf");
+        result.OriginalFileName.Should().Be("original.pdf");
+        result.Content.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task GetMaterialForDownloadAsync_WhenPendingOrRejected_ShouldReturnNull()
+    {
+        using var context = CreateDbContext();
+        var storage = new TestFileStorageService();
+        var user = new User { Id = Guid.NewGuid(), Name = "User", Email = "u@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var subject = new Subject { Id = 1, YearLevel = 1, Code = "IGF101", Name = "Cálculo I" };
+
+        var pending = new Material
+        {
+            Id = Guid.NewGuid(), SubjectId = 1, Subject = subject, UploadedByUserId = user.Id, UploadedByUser = user,
+            Title = "Pendente", Description = "Desc", MaterialType = MaterialType.Exam,
+            FileStorageKey = "k1", OriginalFileName = "f1.pdf", ContentType = "application/pdf", FileSizeBytes = 10,
+            Status = MaterialStatus.Pending, CreatedAt = DateTime.UtcNow
+        };
+        var rejected = new Material
+        {
+            Id = Guid.NewGuid(), SubjectId = 1, Subject = subject, UploadedByUserId = user.Id, UploadedByUser = user,
+            Title = "Rejeitado", Description = "Desc", MaterialType = MaterialType.Exam,
+            FileStorageKey = "k2", OriginalFileName = "f2.pdf", ContentType = "application/pdf", FileSizeBytes = 10,
+            Status = MaterialStatus.Rejected, CreatedAt = DateTime.UtcNow
+        };
+
+        context.Users.Add(user);
+        context.Subjects.Add(subject);
+        context.Materials.AddRange(pending, rejected);
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, storage, new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        var resPending = await sut.GetMaterialForDownloadAsync(pending.Id);
+        var resRejected = await sut.GetMaterialForDownloadAsync(rejected.Id);
+
+        resPending.Should().BeNull();
+        resRejected.Should().BeNull();
     }
 }
