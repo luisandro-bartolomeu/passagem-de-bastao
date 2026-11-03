@@ -1,6 +1,7 @@
 using Core.Interfaces;
 using Infrastructure.Data;
 using Infrastructure.Security;
+using Infrastructure.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,10 +25,27 @@ public static class DependencyInjection
             section.Bind(options);
         });
 
+        // Storage Configuration
+        services.Configure<LocalStorageOptions>(options =>
+        {
+            var section = configuration.GetSection(LocalStorageOptions.SectionName);
+            section.Bind(options);
+        });
+
+        services.Configure<S3StorageOptions>(options =>
+        {
+            var section = configuration.GetSection(S3StorageOptions.SectionName);
+            section.Bind(options);
+        });
+
         // Security & Authentication Services
         services.AddSingleton<IPasswordHasher, BCryptPasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
         services.AddScoped<IRefreshTokenService, RefreshTokenService>();
+
+        // Storage Services
+        services.AddSingleton<IFileValidator, FileValidator>();
+        services.AddScoped<IFileStorageService, LocalFileStorageService>();
 
         return services;
     }
