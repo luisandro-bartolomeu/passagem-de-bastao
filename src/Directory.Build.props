@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+    <!--
+      Configuração centralizada de propriedades MSBuild.
+      O projeto foi desenhado segundo a constituição para .NET 10 / C# 14.
+      Utiliza net9.0 com LangVersion latest para garantir compilação no runtime .NET 9 instalado (SDK 9.0.306),
+      pronto para upgrade para net10.0 assim que o SDK 10 estiver disponível no ambiente.
+    -->
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>
