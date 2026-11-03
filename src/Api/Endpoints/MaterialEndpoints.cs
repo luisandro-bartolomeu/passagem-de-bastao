@@ -22,6 +22,14 @@ public static class MaterialEndpoints
         group.MapGet("/{id:guid}", GetMaterialById)
             .WithName("GetMaterialById");
 
+        group.MapPut("/{id:guid}", UpdateMaterial)
+            .WithName("UpdateMaterial")
+            .RequireAuthorization("DelegateOrAdmin");
+
+        group.MapDelete("/{id:guid}", DeleteMaterial)
+            .WithName("DeleteMaterial")
+            .RequireAuthorization("DelegateOrAdmin");
+
         return app;
     }
 
@@ -165,6 +173,148 @@ public static class MaterialEndpoints
     {
         var material = await materialService.GetMaterialByIdAsync(id, cancellationToken);
         return material == null ? Results.NotFound() : Results.Ok(material);
+    }
+
+    public static async Task<IResult> UpdateMaterial(
+        Guid id,
+        [FromBody] UpdateMaterialRequest? request,
+        ClaimsPrincipal user,
+        IMaterialService materialService,
+        CancellationToken cancellationToken)
+    {
+        if (request == null)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Corpo da Requisição Inválido",
+                detail: "Os dados de atualização são obrigatórios.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Title))
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Título Obrigatório",
+                detail: "O título do material não pode ser vazio.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Description))
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Descrição Obrigatória",
+                detail: "A descrição do material não pode ser vazia.");
+        }
+
+        if (!TryParseMaterialType(request.MaterialType, out var materialType))
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Tipo de Material Inválido",
+                detail: "O tipo de material deve ser 'Exam' ('Prova') ou 'LectureNote' ('Sebenta').");
+        }
+
+        if (request.SubjectId <= 0)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Disciplina Inválida",
+                detail: "O identificador da disciplina (subjectId) é obrigatório e deve ser maior que zero.");
+        }
+
+        var userIdStr = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId))
+        {
+            return Results.Unauthorized();
+        }
+
+        var roleStr = user.FindFirst(ClaimTypes.Role)?.Value;
+        if (string.IsNullOrEmpty(roleStr) || !Enum.TryParse<UserRole>(roleStr, ignoreCase: true, out var userRole))
+        {
+            return Results.Forbid();
+        }
+
+        var updateDto = new UpdateMaterialDto(
+            Title: request.Title,
+            Description: request.Description,
+            MaterialType: materialType,
+            SubjectId: request.SubjectId,
+            PeerHelperName: request.PeerHelperName,
+            PeerHelperContact: request.PeerHelperContact
+        );
+
+        try
+        {
+            var updated = await materialService.UpdateMaterialAsync(id, updateDto, userId, userRole, cancellationToken);
+            return Results.Ok(updated);
+        }
+        catch (MaterialNotFoundException ex)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status404NotFound,
+                title: "Material Não Encontrado",
+                detail: ex.Message);
+        }
+        catch (ForbiddenOperationException ex)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status403Forbidden,
+                title: "Operação Proibida",
+                detail: ex.Message);
+        }
+        catch (SubjectNotFoundException ex)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Disciplina Não Encontrada",
+                detail: ex.Message);
+        }
+        catch (ValidationException ex)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Erro de Validação",
+                detail: ex.Message);
+        }
+    }
+
+    public static async Task<IResult> DeleteMaterial(
+        Guid id,
+        ClaimsPrincipal user,
+        IMaterialService materialService,
+        CancellationToken cancellationToken)
+    {
+        var userIdStr = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId))
+        {
+            return Results.Unauthorized();
+        }
+
+        var roleStr = user.FindFirst(ClaimTypes.Role)?.Value;
+        if (string.IsNullOrEmpty(roleStr) || !Enum.TryParse<UserRole>(roleStr, ignoreCase: true, out var userRole))
+        {
+            return Results.Forbid();
+        }
+
+        try
+        {
+            await materialService.DeleteMaterialAsync(id, userId, userRole, cancellationToken);
+            return Results.NoContent();
+        }
+        catch (MaterialNotFoundException ex)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status404NotFound,
+                title: "Material Não Encontrado",
+                detail: ex.Message);
+        }
+        catch (ForbiddenOperationException ex)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status403Forbidden,
+                title: "Operação Proibida",
+                detail: ex.Message);
+        }
     }
 
     private static bool TryParseMaterialType(string value, out MaterialType materialType)

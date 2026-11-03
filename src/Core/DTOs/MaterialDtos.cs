@@ -35,3 +35,21 @@ public record MaterialResponseDto(
     DateTime CreatedAt,
     DateTime? UpdatedAt
 );
+
+public record UpdateMaterialDto(
+    string Title,
+    string Description,
+    MaterialType MaterialType,
+    int SubjectId,
+    string? PeerHelperName,
+    string? PeerHelperContact
+);
+
+public record UpdateMaterialRequest(
+    string Title,
+    string Description,
+    string MaterialType,
+    int SubjectId,
+    string? PeerHelperName,
+    string? PeerHelperContact
+);

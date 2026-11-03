@@ -295,4 +295,352 @@ public class MaterialServiceTests
 
         result.Should().BeNull();
     }
+
+    [Fact]
+    public async Task UpdateMaterialAsync_AsOwnerDelegado_WhenPending_ShouldUpdateSuccessfully()
+    {
+        using var context = CreateDbContext();
+        var user = new User { Id = Guid.NewGuid(), Name = "Delegado A", Email = "da@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var subject1 = new Subject { Id = 1, YearLevel = 1, Code = "IGF101", Name = "Cálculo I" };
+        var subject2 = new Subject { Id = 2, YearLevel = 1, Code = "IGF102", Name = "Programação I" };
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            SubjectId = 1,
+            Subject = subject1,
+            UploadedByUserId = user.Id,
+            UploadedByUser = user,
+            Title = "Título Antigo",
+            Description = "Descrição Antiga",
+            MaterialType = MaterialType.Exam,
+            FileStorageKey = "keys/file.pdf",
+            OriginalFileName = "file.pdf",
+            ContentType = "application/pdf",
+            FileSizeBytes = 1000,
+            Status = MaterialStatus.Pending,
+            CreatedAt = DateTime.UtcNow.AddHours(-1)
+        };
+
+        context.Users.Add(user);
+        context.Subjects.AddRange(subject1, subject2);
+        context.Materials.Add(material);
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        var updateDto = new UpdateMaterialDto(
+            Title: "Título Novo",
+            Description: "Descrição Nova",
+            MaterialType: MaterialType.LectureNote,
+            SubjectId: 2,
+            PeerHelperName: "Monitor Carlos",
+            PeerHelperContact: "carlos@isutic.ed.ao"
+        );
+
+        var result = await sut.UpdateMaterialAsync(material.Id, updateDto, user.Id, UserRole.Delegado);
+
+        result.Title.Should().Be("Título Novo");
+        result.Description.Should().Be("Descrição Nova");
+        result.MaterialType.Should().Be("LectureNote");
+        result.SubjectId.Should().Be(2);
+        result.SubjectName.Should().Be("Programação I");
+        result.PeerHelperName.Should().Be("Monitor Carlos");
+        result.UpdatedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task UpdateMaterialAsync_AsOwnerDelegado_WhenPublished_ShouldThrowForbiddenOperationException()
+    {
+        using var context = CreateDbContext();
+        var user = new User { Id = Guid.NewGuid(), Name = "Delegado A", Email = "da@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var subject = new Subject { Id = 1, YearLevel = 1, Code = "IGF101", Name = "Cálculo I" };
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            SubjectId = 1,
+            Subject = subject,
+            UploadedByUserId = user.Id,
+            UploadedByUser = user,
+            Title = "Título",
+            Description = "Descrição",
+            MaterialType = MaterialType.Exam,
+            FileStorageKey = "keys/file.pdf",
+            OriginalFileName = "file.pdf",
+            ContentType = "application/pdf",
+            FileSizeBytes = 1000,
+            Status = MaterialStatus.Published, // Already published!
+            CreatedAt = DateTime.UtcNow
+        };
+
+        context.Users.Add(user);
+        context.Subjects.Add(subject);
+        context.Materials.Add(material);
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+        var updateDto = new UpdateMaterialDto("Novo Título", "Nova Descrição", MaterialType.Exam, 1, null, null);
+
+        var act = async () => await sut.UpdateMaterialAsync(material.Id, updateDto, user.Id, UserRole.Delegado);
+
+        var ex = await act.Should().ThrowAsync<ForbiddenOperationException>();
+        ex.WithMessage("*não podem ser alterados por delegados*");
+    }
+
+    [Fact]
+    public async Task UpdateMaterialAsync_AsAnotherDelegado_ShouldThrowForbiddenOperationException()
+    {
+        using var context = CreateDbContext();
+        var owner = new User { Id = Guid.NewGuid(), Name = "Owner Delegado", Email = "owner@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var otherDelegado = new User { Id = Guid.NewGuid(), Name = "Outro Delegado", Email = "other@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var subject = new Subject { Id = 1, YearLevel = 1, Code = "IGF101", Name = "Cálculo I" };
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            SubjectId = 1,
+            Subject = subject,
+            UploadedByUserId = owner.Id,
+            UploadedByUser = owner,
+            Title = "Título",
+            Description = "Descrição",
+            MaterialType = MaterialType.Exam,
+            FileStorageKey = "keys/file.pdf",
+            OriginalFileName = "file.pdf",
+            ContentType = "application/pdf",
+            FileSizeBytes = 1000,
+            Status = MaterialStatus.Pending,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        context.Users.AddRange(owner, otherDelegado);
+        context.Subjects.Add(subject);
+        context.Materials.Add(material);
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+        var updateDto = new UpdateMaterialDto("Novo Título", "Nova Descrição", MaterialType.Exam, 1, null, null);
+
+        var act = async () => await sut.UpdateMaterialAsync(material.Id, updateDto, otherDelegado.Id, UserRole.Delegado);
+
+        var ex = await act.Should().ThrowAsync<ForbiddenOperationException>();
+        ex.WithMessage("*submetidos por outros utilizadores*");
+    }
+
+    [Fact]
+    public async Task UpdateMaterialAsync_AsAdmin_WhenMaterialIsPublished_ShouldUpdateSuccessfully()
+    {
+        using var context = CreateDbContext();
+        var owner = new User { Id = Guid.NewGuid(), Name = "Delegado Owner", Email = "owner@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var admin = new User { Id = Guid.NewGuid(), Name = "Admin Chefe", Email = "admin@isutic.ed.ao", Role = UserRole.Admin, IsActive = true };
+        var subject = new Subject { Id = 1, YearLevel = 1, Code = "IGF101", Name = "Cálculo I" };
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            SubjectId = 1,
+            Subject = subject,
+            UploadedByUserId = owner.Id,
+            UploadedByUser = owner,
+            Title = "Título Inicial",
+            Description = "Descrição Inicial",
+            MaterialType = MaterialType.Exam,
+            FileStorageKey = "keys/file.pdf",
+            OriginalFileName = "file.pdf",
+            ContentType = "application/pdf",
+            FileSizeBytes = 1000,
+            Status = MaterialStatus.Published, // Published!
+            CreatedAt = DateTime.UtcNow
+        };
+
+        context.Users.AddRange(owner, admin);
+        context.Subjects.Add(subject);
+        context.Materials.Add(material);
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+        var updateDto = new UpdateMaterialDto("Título Atualizado pelo Admin", "Descrição Editada", MaterialType.LectureNote, 1, null, null);
+
+        var result = await sut.UpdateMaterialAsync(material.Id, updateDto, admin.Id, UserRole.Admin);
+
+        result.Title.Should().Be("Título Atualizado pelo Admin");
+        result.MaterialType.Should().Be("LectureNote");
+        result.UpdatedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task UpdateMaterialAsync_WithNonExistentMaterial_ShouldThrowMaterialNotFoundException()
+    {
+        using var context = CreateDbContext();
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+        var updateDto = new UpdateMaterialDto("Título", "Descrição", MaterialType.Exam, 1, null, null);
+
+        var act = async () => await sut.UpdateMaterialAsync(Guid.NewGuid(), updateDto, Guid.NewGuid(), UserRole.Admin);
+
+        await act.Should().ThrowAsync<MaterialNotFoundException>();
+    }
+
+    [Fact]
+    public async Task DeleteMaterialAsync_AsOwnerDelegado_WhenPending_ShouldDeleteAndCleanFileStorage()
+    {
+        using var context = CreateDbContext();
+        var fileStorage = new TestFileStorageService();
+        var user = new User { Id = Guid.NewGuid(), Name = "Delegado A", Email = "da@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var subject = new Subject { Id = 1, YearLevel = 1, Code = "IGF101", Name = "Cálculo I" };
+        var storageKey = "keys/material-para-apagar.pdf";
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            SubjectId = 1,
+            Subject = subject,
+            UploadedByUserId = user.Id,
+            UploadedByUser = user,
+            Title = "Para Apagar",
+            Description = "Descrição",
+            MaterialType = MaterialType.Exam,
+            FileStorageKey = storageKey,
+            OriginalFileName = "file.pdf",
+            ContentType = "application/pdf",
+            FileSizeBytes = 1000,
+            Status = MaterialStatus.Pending,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        context.Users.Add(user);
+        context.Subjects.Add(subject);
+        context.Materials.Add(material);
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, fileStorage, new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        await sut.DeleteMaterialAsync(material.Id, user.Id, UserRole.Delegado);
+
+        var deletedEntity = await context.Materials.FindAsync(material.Id);
+        deletedEntity.Should().BeNull();
+        fileStorage.DeletedKeys.Should().Contain(storageKey);
+    }
+
+    [Fact]
+    public async Task DeleteMaterialAsync_AsOwnerDelegado_WhenPublished_ShouldThrowForbiddenOperationException()
+    {
+        using var context = CreateDbContext();
+        var user = new User { Id = Guid.NewGuid(), Name = "Delegado A", Email = "da@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var subject = new Subject { Id = 1, YearLevel = 1, Code = "IGF101", Name = "Cálculo I" };
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            SubjectId = 1,
+            Subject = subject,
+            UploadedByUserId = user.Id,
+            UploadedByUser = user,
+            Title = "Material Publicado",
+            Description = "Descrição",
+            MaterialType = MaterialType.Exam,
+            FileStorageKey = "keys/published.pdf",
+            OriginalFileName = "file.pdf",
+            ContentType = "application/pdf",
+            FileSizeBytes = 1000,
+            Status = MaterialStatus.Published,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        context.Users.Add(user);
+        context.Subjects.Add(subject);
+        context.Materials.Add(material);
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        var act = async () => await sut.DeleteMaterialAsync(material.Id, user.Id, UserRole.Delegado);
+
+        var ex = await act.Should().ThrowAsync<ForbiddenOperationException>();
+        ex.WithMessage("*não podem ser eliminados por delegados*");
+    }
+
+    [Fact]
+    public async Task DeleteMaterialAsync_AsAnotherDelegado_ShouldThrowForbiddenOperationException()
+    {
+        using var context = CreateDbContext();
+        var owner = new User { Id = Guid.NewGuid(), Name = "Delegado 1", Email = "d1@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var other = new User { Id = Guid.NewGuid(), Name = "Delegado 2", Email = "d2@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var subject = new Subject { Id = 1, YearLevel = 1, Code = "IGF101", Name = "Cálculo I" };
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            SubjectId = 1,
+            Subject = subject,
+            UploadedByUserId = owner.Id,
+            UploadedByUser = owner,
+            Title = "Pendente",
+            Description = "Descrição",
+            MaterialType = MaterialType.Exam,
+            FileStorageKey = "keys/p.pdf",
+            OriginalFileName = "file.pdf",
+            ContentType = "application/pdf",
+            FileSizeBytes = 1000,
+            Status = MaterialStatus.Pending,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        context.Users.AddRange(owner, other);
+        context.Subjects.Add(subject);
+        context.Materials.Add(material);
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        var act = async () => await sut.DeleteMaterialAsync(material.Id, other.Id, UserRole.Delegado);
+
+        var ex = await act.Should().ThrowAsync<ForbiddenOperationException>();
+        ex.WithMessage("*submetidos por outros utilizadores*");
+    }
+
+    [Fact]
+    public async Task DeleteMaterialAsync_AsAdmin_WhenMaterialIsPublished_ShouldDeleteSuccessfully()
+    {
+        using var context = CreateDbContext();
+        var fileStorage = new TestFileStorageService();
+        var owner = new User { Id = Guid.NewGuid(), Name = "Delegado 1", Email = "d1@isutic.ed.ao", Role = UserRole.Delegado, IsActive = true };
+        var admin = new User { Id = Guid.NewGuid(), Name = "Admin", Email = "admin@isutic.ed.ao", Role = UserRole.Admin, IsActive = true };
+        var subject = new Subject { Id = 1, YearLevel = 1, Code = "IGF101", Name = "Cálculo I" };
+        var storageKey = "keys/admin-delete-published.pdf";
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            SubjectId = 1,
+            Subject = subject,
+            UploadedByUserId = owner.Id,
+            UploadedByUser = owner,
+            Title = "Publicado para Admin Apagar",
+            Description = "Descrição",
+            MaterialType = MaterialType.Exam,
+            FileStorageKey = storageKey,
+            OriginalFileName = "file.pdf",
+            ContentType = "application/pdf",
+            FileSizeBytes = 1000,
+            Status = MaterialStatus.Published,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        context.Users.AddRange(owner, admin);
+        context.Subjects.Add(subject);
+        context.Materials.Add(material);
+        await context.SaveChangesAsync();
+
+        var sut = new MaterialService(context, fileStorage, new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        await sut.DeleteMaterialAsync(material.Id, admin.Id, UserRole.Admin);
+
+        var deletedEntity = await context.Materials.FindAsync(material.Id);
+        deletedEntity.Should().BeNull();
+        fileStorage.DeletedKeys.Should().Contain(storageKey);
+    }
+
+    [Fact]
+    public async Task DeleteMaterialAsync_WithNonExistentId_ShouldThrowMaterialNotFoundException()
+    {
+        using var context = CreateDbContext();
+        var sut = new MaterialService(context, new TestFileStorageService(), new TestNotificationQueue(), Options.Create(new EmailOptions()), NullLogger<MaterialService>.Instance);
+
+        var act = async () => await sut.DeleteMaterialAsync(Guid.NewGuid(), Guid.NewGuid(), UserRole.Admin);
+
+        await act.Should().ThrowAsync<MaterialNotFoundException>();
+    }
 }

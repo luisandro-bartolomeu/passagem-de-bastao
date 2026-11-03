@@ -156,6 +156,129 @@ public class MaterialService : IMaterialService
         return MapToResponseDto(material, material.Subject.Name, material.UploadedByUser.Name);
     }
 
+    public async Task<MaterialResponseDto> UpdateMaterialAsync(
+        Guid id,
+        UpdateMaterialDto dto,
+        Guid currentUserId,
+        UserRole currentUserRole,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(dto);
+
+        if (string.IsNullOrWhiteSpace(dto.Title))
+        {
+            throw new ValidationException("O título do material é obrigatório.");
+        }
+
+        if (string.IsNullOrWhiteSpace(dto.Description))
+        {
+            throw new ValidationException("A descrição do material é obrigatória.");
+        }
+
+        var material = await _dbContext.Materials
+            .Include(m => m.Subject)
+            .Include(m => m.UploadedByUser)
+            .FirstOrDefaultAsync(m => m.Id == id, cancellationToken);
+
+        if (material == null)
+        {
+            throw new MaterialNotFoundException(id);
+        }
+
+        // Role-based permissions and lock checks (RF05, RN01, CB01)
+        if (currentUserRole != UserRole.Admin)
+        {
+            if (material.UploadedByUserId != currentUserId)
+            {
+                throw new ForbiddenOperationException("Você não tem permissão para alterar materiais submetidos por outros utilizadores.");
+            }
+
+            if (material.Status != MaterialStatus.Pending)
+            {
+                throw new ForbiddenOperationException($"Materiais no estado '{material.Status}' não podem ser alterados por delegados. Apenas materiais pendentes são editáveis.");
+            }
+        }
+
+        // Validate new subject if changed
+        var subjectName = material.Subject.Name;
+        if (dto.SubjectId != material.SubjectId)
+        {
+            var subject = await _dbContext.Subjects
+                .FirstOrDefaultAsync(s => s.Id == dto.SubjectId, cancellationToken);
+
+            if (subject == null)
+            {
+                throw new SubjectNotFoundException(dto.SubjectId);
+            }
+
+            material.SubjectId = dto.SubjectId;
+            material.Subject = subject;
+            subjectName = subject.Name;
+        }
+
+        material.Title = dto.Title.Trim();
+        material.Description = dto.Description.Trim();
+        material.MaterialType = dto.MaterialType;
+        material.PeerHelperName = string.IsNullOrWhiteSpace(dto.PeerHelperName) ? null : dto.PeerHelperName.Trim();
+        material.PeerHelperContact = string.IsNullOrWhiteSpace(dto.PeerHelperContact) ? null : dto.PeerHelperContact.Trim();
+        material.UpdatedAt = DateTime.UtcNow;
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation("Material {MaterialId} atualizado com sucesso pelo utilizador {UserId} (Role: {Role}).",
+            material.Id, currentUserId, currentUserRole);
+
+        return MapToResponseDto(material, subjectName, material.UploadedByUser.Name);
+    }
+
+    public async Task DeleteMaterialAsync(
+        Guid id,
+        Guid currentUserId,
+        UserRole currentUserRole,
+        CancellationToken cancellationToken = default)
+    {
+        var material = await _dbContext.Materials
+            .FirstOrDefaultAsync(m => m.Id == id, cancellationToken);
+
+        if (material == null)
+        {
+            throw new MaterialNotFoundException(id);
+        }
+
+        // Role-based permissions and lock checks (RF05, RN01, CB01)
+        if (currentUserRole != UserRole.Admin)
+        {
+            if (material.UploadedByUserId != currentUserId)
+            {
+                throw new ForbiddenOperationException("Você não tem permissão para eliminar materiais submetidos por outros utilizadores.");
+            }
+
+            if (material.Status != MaterialStatus.Pending)
+            {
+                throw new ForbiddenOperationException($"Materiais no estado '{material.Status}' não podem ser eliminados por delegados. Apenas materiais pendentes podem ser removidos.");
+            }
+        }
+
+        var storageKey = material.FileStorageKey;
+
+        _dbContext.Materials.Remove(material);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        // Physical file cleanup
+        try
+        {
+            await _fileStorageService.DeleteAsync(storageKey, cancellationToken);
+            _logger.LogInformation("Arquivo físico {StorageKey} do material {MaterialId} removido do armazenamento.", storageKey, id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Falha ao remover arquivo físico {StorageKey} do material {MaterialId}.", storageKey, id);
+        }
+
+        _logger.LogInformation("Material {MaterialId} excluído com sucesso pelo utilizador {UserId} (Role: {Role}).",
+            id, currentUserId, currentUserRole);
+    }
+
     private static MaterialResponseDto MapToResponseDto(Material m, string subjectName, string userName)
     {
         return new MaterialResponseDto(
