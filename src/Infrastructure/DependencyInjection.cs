@@ -1,5 +1,6 @@
 using Core.Interfaces;
 using Infrastructure.Data;
+using Infrastructure.Email;
 using Infrastructure.Security;
 using Infrastructure.Storage;
 using Microsoft.EntityFrameworkCore;
@@ -38,6 +39,13 @@ public static class DependencyInjection
             section.Bind(options);
         });
 
+        // Email Configuration
+        services.Configure<EmailOptions>(options =>
+        {
+            var section = configuration.GetSection(EmailOptions.SectionName);
+            section.Bind(options);
+        });
+
         // Security & Authentication Services
         services.AddSingleton<IPasswordHasher, BCryptPasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
@@ -46,6 +54,11 @@ public static class DependencyInjection
         // Storage Services
         services.AddSingleton<IFileValidator, FileValidator>();
         services.AddScoped<IFileStorageService, LocalFileStorageService>();
+
+        // Email & Background Queue Services
+        services.AddSingleton<IEmailNotificationQueue, EmailNotificationQueue>();
+        services.AddSingleton<IEmailSender, MailKitEmailSender>();
+        services.AddHostedService<EmailNotificationBackgroundService>();
 
         return services;
     }
