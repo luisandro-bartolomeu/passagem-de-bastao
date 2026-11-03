@@ -88,10 +88,8 @@ app.MapMaterialEndpoints();
 // Map Admin Materials Moderation Endpoints (T08)
 app.MapAdminMaterialEndpoints();
 
-// Auth Routes group (T10)
-app.MapGroup("/api/v1/auth")
-   .WithTags("Auth")
-   .RequireRateLimiting(RateLimitingExtensions.StrictPolicy);
+// Map Authentication Endpoints (T11)
+app.MapAuthEndpoints();
 
 // Diagnostic test endpoints for exception handling and rate limiting verification
 if (app.Environment.IsDevelopment() || app.Environment.EnvironmentName == "Testing")
