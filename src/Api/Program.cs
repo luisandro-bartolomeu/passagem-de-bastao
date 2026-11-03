@@ -1,6 +1,8 @@
 using System.Text;
+using Api.Endpoints;
 using Infrastructure;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -9,6 +11,12 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
 builder.Services.AddInfrastructure(builder.Configuration);
+
+// Configure Upload Limits (up to 55 MB to comfortably support 50 MB files)
+builder.Services.Configure<FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = 55 * 1024 * 1024;
+});
 
 // Configure Authentication with JWT Bearer
 var jwtSecretKey = builder.Configuration["Jwt:SecretKey"] ?? "SuperSecretKeyForDevelopmentTesting1234567890!";
@@ -60,6 +68,9 @@ app.MapGet("/", () => Results.Ok(new { message = "IGF Academic Repository API" }
 
 app.MapGet("/health", () => Results.Ok(new { status = "Healthy" }))
    .WithName("GetHealth");
+
+// Map Materials Endpoints (T06)
+app.MapMaterialEndpoints();
 
 app.Run();
 

@@ -2,6 +2,7 @@ using Core.Interfaces;
 using Infrastructure.Data;
 using Infrastructure.Email;
 using Infrastructure.Security;
+using Infrastructure.Services;
 using Infrastructure.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -59,6 +60,9 @@ public static class DependencyInjection
         services.AddSingleton<IEmailNotificationQueue, EmailNotificationQueue>();
         services.AddSingleton<IEmailSender, MailKitEmailSender>();
         services.AddHostedService<EmailNotificationBackgroundService>();
+
+        // Material Domain Services
+        services.AddScoped<IMaterialService, MaterialService>();
 
         return services;
     }
